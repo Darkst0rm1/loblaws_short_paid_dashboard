@@ -41,6 +41,7 @@ class DebitMemoDocument:
     debit_memo_number: str | None = None
     invoice_number: str | None = None
     invoice_reference: str | None = None
+    vendor_reference: str | None = None
     vendor_number: str | None = None
     store_number: str | None = None
     document_date: str | None = None

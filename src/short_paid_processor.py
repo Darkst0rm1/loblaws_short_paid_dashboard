@@ -69,6 +69,7 @@ def process(
             debit_memo_number=doc.debit_memo_number,
             invoice_number=doc.invoice_number,
             invoice_reference=doc.invoice_reference,
+            vendor_reference=doc.vendor_reference,
             columns=sp_columns,
         )
 

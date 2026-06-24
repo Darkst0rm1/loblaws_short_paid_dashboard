@@ -27,6 +27,17 @@ def _safe_index(columns, value) -> int:
     return cols.index(value) if value in cols else 0
 
 
+def _default_sp_sheet_index(sheets, file_bytes) -> int:
+    """Default to the first sheet that already has the result column (e.g. QTY)."""
+    for i, name in enumerate(sheets):
+        try:
+            if cd.RESULT_COLUMN in _read_sheet(file_bytes, name).columns:
+                return i
+        except Exception:
+            continue
+    return 0
+
+
 def _init_state():
     st.session_state.setdefault("processed", None)
     st.session_state.setdefault("seen_hashes", {})
@@ -100,7 +111,9 @@ with c1:
     default_lcl = file_loader.choose_lcl_sheet(lcl_sheets) or lcl_sheets[0]
     lcl_sheet = st.selectbox("LCL worksheet", lcl_sheets, index=lcl_sheets.index(default_lcl))
 with c2:
-    sp_sheet = st.selectbox("Short Paid worksheet", sp_sheets, index=0)
+    sp_sheet = st.selectbox(
+        "Short Paid worksheet", sp_sheets, index=_default_sp_sheet_index(sp_sheets, sp_bytes)
+    )
 
 lcl_df = _read_sheet(lcl_bytes, lcl_sheet)
 sp_df = _read_sheet(sp_bytes, sp_sheet)
@@ -179,7 +192,8 @@ if st.button("Process Debit Memo PDFs", type="primary"):
         st.write(
             f"**{f.name}** - pages: {doc.page_count}, "
             f"{'OCR' if doc.ocr_used else 'text'}, DM#: {doc.debit_memo_number}, "
-            f"inv ref: {doc.invoice_reference}, lines: {len(doc.lines)}, status: {doc.status}"
+            f"vendor ref: {doc.vendor_reference}, inv ref: {doc.invoice_reference}, "
+            f"lines: {len(doc.lines)}, status: {doc.status}"
         )
         progress.progress(i / len(debit_memo_files))
 

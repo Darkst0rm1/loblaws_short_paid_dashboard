@@ -53,7 +53,7 @@ def test_valid_and_invalid_lines_in_one_cell():
     assert 0 in cells
     text = cells[0]
     assert "10057258, 7, 173.74" in text
-    assert "99999999999, 23, 567.64 - Material not valid in LCL" in text
+    assert "UPC# 99999999999, 23, 567.64 - not valid on LCL material list" in text
 
 
 def test_unlinked_debit_memo_not_written():

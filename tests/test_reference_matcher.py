@@ -33,6 +33,37 @@ def test_normalize_trailing_dot_zero():
     assert normalize_reference("998877.0") == "998877"
 
 
+def test_normalize_strips_leading_zeros_for_digits():
+    # Vendor reference 0090091172 must match the *D90091172 reference.
+    assert normalize_reference("0090091172") == "90091172"
+    assert normalize_reference(90091172) == "90091172"
+
+
+def test_vendor_reference_matches_full_debit_description():
+    df = pd.DataFrame({
+        "Invoice Reference": ["1400023470", "1400099999"],
+        "Reference": ["8806394", "7777777"],
+        "Item Text": ["Spcfy in p.adv: Reference *D90091172", "other"],
+        "FULL DEBIT DESCRIPTION": [90091172, 11111111],
+    })
+    res = match_debit_memo_to_rows(df, vendor_reference="0090091172", columns=COLUMNS)
+    assert res.status == "matched"
+    assert res.row_index == 0
+    assert res.match_method in ("exact_full_debit_description", "vendor_ref_in_full_description")
+
+
+def test_vendor_reference_matches_item_text_substring():
+    df = pd.DataFrame({
+        "Invoice Reference": ["1400023470"],
+        "Reference": ["8806394"],
+        "Item Text": ["Spcfy in p.adv: Reference *D90091172"],
+        "FULL DEBIT DESCRIPTION": ["short paid"],
+    })
+    res = match_debit_memo_to_rows(df, vendor_reference="0090091172", columns=COLUMNS)
+    assert res.status == "matched"
+    assert res.row_index == 0
+
+
 # --- Matching ----------------------------------------------------------------
 
 def test_exact_invoice_reference_match():

@@ -107,7 +107,7 @@ def test_valid_material_output():
 
 def test_invalid_lcl_material_output():
     out = format_result_line("10724923451967", Decimal("7"), Decimal("173.74"), valid=False)
-    assert out == f"10724923451967, 7, 173.74 - {INVALID_MESSAGE}"
+    assert out == "UPC# 10724923451967, 7, 173.74 - not valid on LCL material list"
 
 
 def test_two_decimal_amount_formatting():
@@ -125,4 +125,4 @@ def test_fractional_quantity_kept():
 
 
 def test_exact_invalid_message():
-    assert INVALID_MESSAGE == "Material not valid in LCL"
+    assert INVALID_MESSAGE == "not valid on LCL material list"

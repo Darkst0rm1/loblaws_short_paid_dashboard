@@ -159,7 +159,7 @@ def duplicate_upc_stats(index: dict) -> dict:
 
 # --- Result formatting helpers ------------------------------------------------
 
-INVALID_MESSAGE = "Material not valid in LCL"
+INVALID_MESSAGE = "not valid on LCL material list"
 
 
 def format_quantity(qty) -> str:
@@ -191,10 +191,9 @@ def format_amount(amount) -> str:
 def format_result_line(material_or_upc: str, qty, net, valid: bool) -> str:
     """Build a single result line for the result cell.
 
-    Valid:   ``MATERIAL#, QTY, AMOUNT``
-    Invalid: ``UPC, QTY, AMOUNT - Material not valid in LCL``
+    Valid:   ``MATERIAL#, QTY, AMOUNT``                       e.g. ``10057258, 70, 6375.60``
+    Invalid: ``UPC# UPC, QTY, AMOUNT - not valid on LCL material list``
     """
-    base = f"{material_or_upc}, {format_quantity(qty)}, {format_amount(net)}"
     if valid:
-        return base
-    return f"{base} - {INVALID_MESSAGE}"
+        return f"{material_or_upc}, {format_quantity(qty)}, {format_amount(net)}"
+    return f"UPC# {material_or_upc}, {format_quantity(qty)}, {format_amount(net)} - {INVALID_MESSAGE}"
