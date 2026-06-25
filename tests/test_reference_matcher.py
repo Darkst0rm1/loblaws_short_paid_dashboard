@@ -1,135 +1,63 @@
+"""Reference normalization, column detection, and short-paid matching."""
 import pandas as pd
 
-from src.reference_matcher import match_debit_memo_to_rows, normalize_reference
-
-COLUMNS = {
-    "invoice_reference": "Invoice Reference",
-    "reference": "Reference",
-    "item_text": "Item Text",
-    "full_debit_description": "FULL DEBIT DESCRIPTION",
-}
+from src import reference_matcher as rm
 
 
-def _df():
-    return pd.DataFrame({
-        "Invoice Reference": ["INV-998877", "INV-111", "INV-222"],
-        "Reference": ["DM12345", "RX-1", "RX-2"],
-        "Item Text": ["misc", "see DM55555", "other"],
-        "FULL DEBIT DESCRIPTION": ["debit for INV777", "nope", "memo DM99999 details"],
-    })
+# (1) Leading-zero removal from Vendor Reference Number.
+def test_normalize_removes_only_leading_zeroes():
+    assert rm.normalize_reference("0090091172") == "90091172"
+    assert rm.normalize_reference("  0090091172 ") == "90091172"
+    assert rm.normalize_reference(90091172) == "90091172"
+    assert rm.normalize_reference(90091172.0) == "90091172"  # excel float
 
 
-# --- Normalization -----------------------------------------------------------
-
-def test_normalize_removes_labels_and_punct():
-    # Leading labels are stripped; normalization is symmetric on both sides.
-    assert normalize_reference("Invoice INV-998877") == "998877"
-    assert normalize_reference("Debit Memo: DM12345") == "dm12345"
-    # Punctuation and case are normalized away.
-    assert normalize_reference("RX_1-2 / 3") == "rx123"
+def test_normalize_keeps_non_zero_prefixes():
+    # Letters such as D / OI are NOT stripped — only leading zeroes.
+    assert rm.normalize_reference("D90157331") == "D90157331"
+    assert rm.normalize_reference("OI12345") == "OI12345"
+    assert rm.normalize_reference("0D123") == "D123"
 
 
-def test_normalize_trailing_dot_zero():
-    assert normalize_reference("998877.0") == "998877"
+def test_detect_reference_column_priority():
+    cols = ["Reference", "FULL DEBIT DESCRIPTION", "Debit Description Number"]
+    # Debit Description Number outranks FULL DEBIT DESCRIPTION.
+    assert rm.detect_reference_column(cols) == "Debit Description Number"
+    assert rm.detect_reference_column(["a", "Vendor Reference Number", "Debit Description Number"]) \
+        == "Vendor Reference Number"
+    assert rm.detect_reference_column(["FULL DEBIT DESCRIPTION"]) == "FULL DEBIT DESCRIPTION"
+    assert rm.detect_reference_column(["x", "y"]) is None
 
 
-def test_normalize_strips_leading_zeros_for_digits():
-    # Vendor reference 0090091172 must match the *D90091172 reference.
-    assert normalize_reference("0090091172") == "90091172"
-    assert normalize_reference(90091172) == "90091172"
+def _sp(values):
+    return pd.DataFrame({"FULL DEBIT DESCRIPTION": values})
 
 
-def test_vendor_reference_matches_full_debit_description():
-    df = pd.DataFrame({
-        "Invoice Reference": ["1400023470", "1400099999"],
-        "Reference": ["8806394", "7777777"],
-        "Item Text": ["Spcfy in p.adv: Reference *D90091172", "other"],
-        "FULL DEBIT DESCRIPTION": [90091172, 11111111],
-    })
-    res = match_debit_memo_to_rows(df, vendor_reference="0090091172", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 0
-    assert res.match_method in ("exact_full_debit_description", "vendor_ref_in_full_description")
+# (2) Exact short-paid match.
+def test_exact_match_after_normalization():
+    df = _sp([90157331, 90091172, 11111111])
+    status, rows = rm.match_reference(df, "FULL DEBIT DESCRIPTION", "0090091172")
+    assert status == rm.MATCH_FOUND
+    assert rows == [1]
 
 
-def test_vendor_reference_matches_item_text_substring():
-    df = pd.DataFrame({
-        "Invoice Reference": ["1400023470"],
-        "Reference": ["8806394"],
-        "Item Text": ["Spcfy in p.adv: Reference *D90091172"],
-        "FULL DEBIT DESCRIPTION": ["short paid"],
-    })
-    res = match_debit_memo_to_rows(df, vendor_reference="0090091172", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 0
+# (3) Missing short-paid match.
+def test_no_match():
+    df = _sp([90157331, 11111111])
+    status, rows = rm.match_reference(df, "FULL DEBIT DESCRIPTION", "0090091172")
+    assert status == rm.MATCH_NOT_FOUND
+    assert rows == []
 
 
-# --- Matching ----------------------------------------------------------------
-
-def test_exact_invoice_reference_match():
-    res = match_debit_memo_to_rows(_df(), invoice_reference="INV-998877", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 0
-
-
-def test_exact_debit_memo_via_reference():
-    res = match_debit_memo_to_rows(_df(), debit_memo_number="DM12345", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 0
+# (4) Duplicate short-paid match.
+def test_duplicate_match():
+    df = _sp([90091172, 90091172, 22222222])
+    status, rows = rm.match_reference(df, "FULL DEBIT DESCRIPTION", "90091172")
+    assert status == rm.MATCH_DUPLICATE
+    assert rows == [0, 1]
 
 
-def test_identifier_inside_full_description():
-    res = match_debit_memo_to_rows(_df(), debit_memo_number="DM99999", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 2
-    assert "full_description" in res.match_method
-
-
-def test_identifier_inside_item_text():
-    res = match_debit_memo_to_rows(_df(), debit_memo_number="DM55555", columns=COLUMNS)
-    assert res.status == "matched"
-    assert res.row_index == 1
-
-
-def test_no_row_found():
-    res = match_debit_memo_to_rows(_df(), debit_memo_number="NOPE000", columns=COLUMNS)
-    assert res.status == "not_found"
-
-
-def test_multiple_rows_found_is_ambiguous():
-    df = pd.DataFrame({
-        "Invoice Reference": ["DUP", "DUP"],
-        "Reference": ["", ""],
-        "Item Text": ["", ""],
-        "FULL DEBIT DESCRIPTION": ["", ""],
-    })
-    res = match_debit_memo_to_rows(df, invoice_reference="DUP", columns=COLUMNS)
-    assert res.status == "ambiguous"
-    assert res.candidate_rows == [0, 1]
-
-
-def test_controlled_fuzzy_fallback():
-    # Slightly different reference; only resolvable by fuzzy.
-    df = pd.DataFrame({
-        "Invoice Reference": ["INV9988770"],
-        "Reference": [""],
-        "Item Text": [""],
-        "FULL DEBIT DESCRIPTION": [""],
-    })
-    res = match_debit_memo_to_rows(df, invoice_reference="INV998877", columns=COLUMNS)
-    # Either fuzzy matches (high similarity) or not found, but never wrong row.
-    assert res.status in ("matched", "not_found")
-    if res.status == "matched":
-        assert res.match_method == "fuzzy_reference"
-        assert res.match_score >= 92.0
-
-
-def test_low_score_fuzzy_rejected():
-    df = pd.DataFrame({
-        "Invoice Reference": ["ZZZ000111"],
-        "Reference": [""],
-        "Item Text": [""],
-        "FULL DEBIT DESCRIPTION": [""],
-    })
-    res = match_debit_memo_to_rows(df, invoice_reference="INV998877", columns=COLUMNS)
-    assert res.status == "not_found"
+def test_blank_cells_never_match():
+    df = _sp([None, "", 90091172])
+    status, rows = rm.match_reference(df, "FULL DEBIT DESCRIPTION", "90091172")
+    assert status == rm.MATCH_FOUND and rows == [2]

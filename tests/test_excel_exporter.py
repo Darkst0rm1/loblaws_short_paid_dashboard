@@ -1,115 +1,87 @@
+"""Workbook export: preserve originals, create / number the results sheet."""
 import io
 
-from openpyxl import Workbook, load_workbook
+import openpyxl
 
-from src.column_detector import RESULT_COLUMN
-from src.excel_exporter import build_exceptions_workbook, write_results
-from src.models import ProcessingException
+from src import excel_exporter
+from src.formatting import RESULT_COLUMNS
+from src.models import STATUS_PROCESSED, STATUS_REVIEW, DebitMemoResult
 
 
-def _make_workbook() -> bytes:
-    wb = Workbook()
+def _source_workbook(extra_sheets=None):
+    """A small short-paid-like workbook with a value, a formula, and formatting."""
+    wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "06.08.26"
-    ws.append(["Invoice Reference", "Amount", "Dispute Status"])
-    ws.append(["INV-100", 173.74, "Open"])
-    ws.append(["INV-200", 316.94, "Open"])
-    ws.append(["INV-300", 50.00, "Closed"])
-    # A second worksheet that must be preserved.
-    other = wb.create_sheet("QTY")
-    other.append(["keep", "me"])
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
+    ws["A1"] = "FULL DEBIT DESCRIPTION"
+    ws["B1"] = "Amount"
+    ws["A2"] = 90091172
+    ws["B2"] = 100
+    ws["B3"] = "=B2*2"          # formula must survive
+    ws["A1"].font = openpyxl.styles.Font(bold=True)
+    ws.column_dimensions["A"].width = 30
+    for name in extra_sheets or []:
+        wb.create_sheet(name)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
-def test_result_column_added_and_written():
-    data = _make_workbook()
-    row_cells = {0: "10057258, 7, 173.74"}
-    new_bytes = write_results(data, "06.08.26", row_cells)
-
-    wb = load_workbook(io.BytesIO(new_bytes))
-    ws = wb["06.08.26"]
-    headers = [c.value for c in ws[1]]
-    assert RESULT_COLUMN in headers
-    col = headers.index(RESULT_COLUMN) + 1
-    # Data row 0 -> worksheet row 2.
-    assert ws.cell(row=2, column=col).value == "10057258, 7, 173.74"
-
-
-def test_original_columns_and_rows_preserved():
-    data = _make_workbook()
-    new_bytes = write_results(data, "06.08.26", {0: "x, 1, 1.00"})
-    wb = load_workbook(io.BytesIO(new_bytes))
-    ws = wb["06.08.26"]
-    headers = [c.value for c in ws[1]]
-    assert headers[:3] == ["Invoice Reference", "Amount", "Dispute Status"]
-    # Original data still present and in order.
-    assert ws.cell(row=2, column=1).value == "INV-100"
-    assert ws.cell(row=3, column=1).value == "INV-200"
-    assert ws.cell(row=4, column=1).value == "INV-300"
-
-
-def test_other_worksheets_preserved():
-    data = _make_workbook()
-    new_bytes = write_results(data, "06.08.26", {0: "x, 1, 1.00"})
-    wb = load_workbook(io.BytesIO(new_bytes))
-    assert "QTY" in wb.sheetnames
-    assert wb["QTY"].cell(row=1, column=1).value == "keep"
-
-
-def test_multiline_cell_and_wrap():
-    data = _make_workbook()
-    value = "10057258, 7, 173.74\n99999999, 23, 567.64 - Material not valid in LCL"
-    new_bytes = write_results(data, "06.08.26", {0: value})
-    wb = load_workbook(io.BytesIO(new_bytes))
-    ws = wb["06.08.26"]
-    headers = [c.value for c in ws[1]]
-    col = headers.index(RESULT_COLUMN) + 1
-    cell = ws.cell(row=2, column=col)
-    assert "\n" in cell.value
-    assert cell.alignment.wrap_text is True
-
-
-def test_existing_result_column_updated():
-    # Build a workbook that already has the result column.
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "S"
-    ws.append(["Invoice Reference", RESULT_COLUMN])
-    ws.append(["INV-100", "old value"])
-    out = io.BytesIO()
-    wb.save(out)
-    data = out.getvalue()
-
-    new_bytes = write_results(data, "S", {0: "10057258, 7, 173.74"})
-    wb2 = load_workbook(io.BytesIO(new_bytes))
-    ws2 = wb2["S"]
-    headers = [c.value for c in ws2[1]]
-    # Result column not duplicated.
-    assert headers.count(RESULT_COLUMN) == 1
-    col = headers.index(RESULT_COLUMN) + 1
-    assert ws2.cell(row=2, column=col).value == "10057258, 7, 173.74"
-
-
-def test_unmatched_rows_left_blank():
-    data = _make_workbook()
-    new_bytes = write_results(data, "06.08.26", {0: "x, 1, 1.00"})
-    wb = load_workbook(io.BytesIO(new_bytes))
-    ws = wb["06.08.26"]
-    headers = [c.value for c in ws[1]]
-    col = headers.index(RESULT_COLUMN) + 1
-    # Rows 1 and 2 (df index) were not written -> blank.
-    assert ws.cell(row=3, column=col).value in (None, "")
-    assert ws.cell(row=4, column=col).value in (None, "")
-
-
-def test_exceptions_workbook_has_all_sheets():
-    exc = [
-        ProcessingException(category="Invalid LCL Materials", reason="Material not valid in LCL", upc="999"),
-        ProcessingException(category="Unlinked Debit Memos", reason="Short Paid row not found"),
+def _results():
+    return [
+        DebitMemoResult(source_file="a.pdf", vendor_reference="90091172",
+                        debit_number="1709032065", po_number="4878948624",
+                        cell_text="10057258, 70, $6,375.60", status=STATUS_PROCESSED),
+        DebitMemoResult(source_file="b.pdf", vendor_reference="90157331",
+                        debit_number="1709032066", po_number="4878948625",
+                        cell_text="UPC 123 not found, 5, $1.00", status=STATUS_REVIEW,
+                        review_reason="UPC 123 not found in material list"),
     ]
-    data = build_exceptions_workbook(exc)
-    wb = load_workbook(io.BytesIO(data))
-    for sheet in ["Invalid LCL Materials", "Review Required", "Unlinked Debit Memos"]:
-        assert sheet in wb.sheetnames
+
+
+# (15) Original worksheets remain unchanged.
+def test_originals_unchanged():
+    src = _source_workbook()
+    out = excel_exporter.build_workbook(src, _results())
+
+    before = openpyxl.load_workbook(io.BytesIO(src))
+    after = openpyxl.load_workbook(io.BytesIO(out))
+    ws_b, ws_a = before["06.08.26"], after["06.08.26"]
+    assert ws_a["A1"].value == ws_b["A1"].value == "FULL DEBIT DESCRIPTION"
+    assert ws_a["A2"].value == 90091172
+    assert ws_a["B3"].value == "=B2*2"               # formula preserved
+    assert ws_a["A1"].font.bold is True              # formatting preserved
+    assert ws_a.column_dimensions["A"].width == 30   # width preserved
+
+
+# (16) New results sheet creation with the right columns and rows.
+def test_results_sheet_created():
+    out = excel_exporter.build_workbook(_source_workbook(), _results())
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    assert wb.sheetnames[-1] == "Debit Memo Results"
+    ws = wb["Debit Memo Results"]
+    assert [c.value for c in ws[1]] == RESULT_COLUMNS
+    assert ws["A2"].value == "90091172"
+    assert ws["D2"].value == "10057258, 70, $6,375.60"
+    assert ws.freeze_panes == "A2"
+    assert ws.auto_filter.ref is not None
+    # Manual-review highlight present as a conditional-formatting rule.
+    assert len(ws.conditional_formatting._cf_rules) >= 1
+
+
+# (17) Existing results-sheet name collision -> next numbered name.
+def test_results_sheet_name_collision():
+    src = _source_workbook(extra_sheets=["Debit Memo Results", "Debit Memo Results 2"])
+    out = excel_exporter.build_workbook(src, _results())
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    assert "Debit Memo Results 3" in wb.sheetnames
+    # Pre-existing sheets are not overwritten.
+    assert "Debit Memo Results" in wb.sheetnames
+    assert "Debit Memo Results 2" in wb.sheetnames
+
+
+def test_unique_sheet_name_helper():
+    assert excel_exporter.unique_sheet_name([]) == "Debit Memo Results"
+    assert excel_exporter.unique_sheet_name(["Debit Memo Results"]) == "Debit Memo Results 2"
+    assert excel_exporter.unique_sheet_name(
+        ["Debit Memo Results", "Debit Memo Results 2"]) == "Debit Memo Results 3"

@@ -84,16 +84,14 @@ def main(path_str: str) -> None:
     # --- Parser result ------------------------------------------------------
     print("-" * 70)
     try:
-        from src.debit_memo_parser import parse_debit_memo_text
+        from src.pdf_parser import parse_pdf
 
-        total_lines = 0
-        for i, page_text in enumerate(best, start=1):
-            doc = parse_debit_memo_text(page_text, path.name, i)
-            total_lines += len(doc.lines)
-            if i == 1:
-                print(f"Header parsed: DM#={doc.debit_memo_number}, "
-                      f"inv_ref={doc.invoice_reference}, inv#={doc.invoice_number}")
-        print(f"PRODUCT LINES RECOGNIZED BY CURRENT PARSER: {total_lines}")
+        memo = parse_pdf(path.read_bytes(), path.name)
+        print(f"Header parsed: Debit#={memo.debit_number}, "
+              f"vendor_ref={memo.vendor_reference}, PO={memo.po_number}, "
+              f"date={memo.debit_date}, error={memo.parse_error}")
+        print(f"PRODUCT LINES RECOGNIZED BY CURRENT PARSER: {len(memo.items)}")
+        total_lines = len(memo.items)
         if total_lines == 0 and total_text >= 20:
             print(">> Text exists but the parser matched 0 rows -> the row layout")
             print("   differs from what the regex expects. Paste the preview above")
